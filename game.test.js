@@ -14,7 +14,7 @@ function game() {
     window:{addEventListener(name,fn){listeners[name]=fn;}},localStorage:{getItem(){return null;},setItem(){}},requestAnimationFrame(){},Math,console
   });
   const source=readFileSync(new URL('./game.js',import.meta.url),'utf8');
-  vm.runInContext(source.replace(/\}\)\(\);\s*$/,`globalThis.testGame={start,update,pause,fire,tank,destroy,collect,blocked,keys,
+  vm.runInContext(source.replace(/\}\)\(\);\s*$/,`globalThis.testGame={start,update,pause,fire,tank,destroy,collect,blocked,keys,updateAlly,planAlly,safeAllyShot,
     get state(){return state},get tanks(){return tanks},get bullets(){return bullets},get map(){return map},get lives(){return lives},get score(){return score},get stage(){return stage},get upgrades(){return upgrades},get freeze(){return freeze},
     set mode(v){mode=v},set spawned(v){spawned=v},set kills(v){kills=v}};})();`),context);
   return {g:context.testGame,e:element,listeners};
@@ -58,4 +58,52 @@ test('tank collision blocks walls, water, other tanks and field boundaries',()=>
   assert.ok(g.blocked(p,-2,100));assert.ok(g.blocked(p,5*24+12,12*24+12));
   g.map[10][10]=1;assert.ok(g.blocked(p,10*24+12,10*24+12));
   const enemy=g.tank(100,100,2);g.tanks.push(enemy);assert.ok(g.blocked(p,100,100));
+});
+test('single-player spawns an AI ally with independent lives; two-player keeps manual control',()=>{
+  const {g,e}=game();g.start();let ally=g.tanks.find(t=>t.player===1);
+  assert.equal(ally.ai,true);assert.equal(e('p2-title').textContent,'AI TEAMMATE');
+  g.destroy(ally);assert.equal(g.lives[0],3);assert.equal(g.lives[1],2);
+  assert.equal(g.tanks.find(t=>t.player===1).ai,true);
+  g.mode=2;g.start();ally=g.tanks.find(t=>t.player===1);
+  assert.equal(ally.ai,false);const x=ally.x;
+  g.keys.add('ArrowRight');g.update(.03);assert.ok(ally.x>x);
+});
+test('AI automatically shoots enemies and awards the shared score',()=>{
+  const {g}=game();g.start();g.spawned=20;
+  for(const row of g.map)row.fill(0);
+  const ally=g.tanks.find(t=>t.ai);ally.x=384;ally.y=480;
+  const enemy=g.tank(384,360,2);enemy.shield=0;g.tanks.push(enemy);
+  g.collect(ally,{kind:2});
+  for(let i=0;i<50;i++)g.update(1/60);
+  assert.ok(!g.tanks.includes(enemy));assert.equal(g.score,300);
+});
+test('AI prioritizes the enemy near the base over an aligned distant enemy',()=>{
+  const {g}=game();g.start();for(const row of g.map)row.fill(0);
+  const ally=g.tanks.find(t=>t.ai);ally.x=384;ally.y=400;
+  const distant=g.tank(384,100,2),threat=g.tank(240,510,2);
+  g.tanks.push(distant,threat);g.updateAlly(ally,.03);
+  assert.equal(ally.target,threat);assert.equal(g.bullets.length,0);
+});
+test('AI routes around steel and water using corridors wide enough for its hull',()=>{
+  for(const material of [2,3]) {
+    const {g}=game();g.start();for(const row of g.map)row.fill(0);
+    for(let y=1;y<26;y++)if(y<9||y>11)g.map[y][12]=material;
+    const ally=g.tanks.find(t=>t.ai);ally.x=240;ally.y=480;
+    const target=g.tank(384,480,2);g.tanks.push(target);
+    // Steel blocks shots; water only blocks movement. Force a steel firing screen
+    // on the far side so both terrain cases require a detour.
+    if(material===3)for(let y=12;y<26;y++)g.map[y][13]=2;
+    const path=g.planAlly(ally,target);
+    assert.ok(path.some(p=>p.y<=11*24));
+    for(const p of path)assert.equal(g.blocked(ally,p.x,p.y,true),false);
+    for(let i=0;i<90;i++)g.updateAlly(ally,1/60);
+    assert.ok(ally.y<480);
+  }
+});
+test('AI refuses shots through the base or its protective walls',()=>{
+  const {g}=game();g.start();const ally=g.tanks.find(t=>t.ai);
+  assert.equal(g.safeAllyShot({x:240,y:600},{x:384,y:600},1),false);
+  assert.equal(g.safeAllyShot({x:240,y:552},{x:384,y:552},1),false);
+  ally.x=240;ally.y=600;const enemy=g.tank(384,600,3);g.tanks.push(enemy);
+  g.updateAlly(ally,.03);assert.equal(g.bullets.length,0);
 });

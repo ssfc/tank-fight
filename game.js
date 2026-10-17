@@ -48,11 +48,14 @@
   }
   function spawnPlayer(p) {
     if(lives[p]<=0) return;
-    tanks.push(tank(p===0?8*T:16*T,24*T-6,0,p));
+    const friend=tank(p===0?8*T:16*T,24*T-6,0,p);
+    friend.ai=p===1&&mode===1;
+    friend.path=[];
+    tanks.push(friend);
   }
   function setupLevel() {
     generateMap(stage); tanks=[];bullets=[];particles=[];drops=[];kills=0;spawned=0;spawnTimer=.8;freeze=0;fortify=0;baseAlive=true;
-    spawnPlayer(0); if(mode===2) spawnPlayer(1);
+    spawnPlayer(0); spawnPlayer(1);
     $('stage-label').textContent='STAGE '+String(stage).padStart(2,'0');
     document.querySelector('.mission .eyebrow span').textContent=String(stage).padStart(2,'0')+' / ∞';
     updateHUD();
@@ -67,8 +70,9 @@
     $('best').textContent=String(best).padStart(6,'0');
     $('enemies').innerHTML=(20-kills)+' <small>辆</small>';
     $('enemy-grid').innerHTML=Array.from({length:20},(_,i)=>'<span class="'+(i<kills?'dead':'')+'"></span>').join('');
-    $('life1').textContent='× '+lives[0];$('life2').textContent=mode===2?'× '+lives[1]:'—';
-    $('p2-label').textContent=mode===2?'僚机 / 绿色坦克':'等待战友加入';
+    $('life1').textContent='× '+lives[0];$('life2').textContent='× '+lives[1];
+    $('p2-title').textContent=mode===2?'PLAYER 2':'AI TEAMMATE';
+    $('p2-label').textContent=mode===2?'僚机 / 绿色坦克':'智能僚机 / 自动回防';
   }
   function overlay(title,desc,kicker,button) {
     $('overlay-title').textContent=title;$('overlay-desc').textContent=desc;$('overlay-kicker').textContent=kicker;
@@ -84,14 +88,73 @@
     else if(state==='paused'){state='playing';$('overlay').classList.add('hidden');$('pause').textContent='Ⅱ 暂停';$('game-status').textContent='作战进行中';}
   }
   function intersects(a,b,pad=0) {return Math.abs(a.x-b.x)<(a.size+b.size)/2-pad && Math.abs(a.y-b.y)<(a.size+b.size)/2-pad;}
-  function blocked(t,x,y) {
+  function blocked(t,x,y,terrainOnly=false) {
     const r=t.size/2-2;
     if(x-r<0||y-r<0||x+r>SIZE||y+r>SIZE) return true;
     for(let gy=Math.floor((y-r)/T);gy<=Math.floor((y+r-.01)/T);gy++) for(let gx=Math.floor((x-r)/T);gx<=Math.floor((x+r-.01)/T);gx++) {
       const cell=map[gy]?.[gx]; if(cell===1||cell===2||cell===3) return true;
     }
     if(baseAlive && Math.abs(x-13*T)<r+T-2 && Math.abs(y-25*T)<r+T-2) return true;
-    return tanks.some(other=>other!==t&&intersects({x,y,size:t.size},other,3));
+    return !terrainOnly&&tanks.some(other=>other!==t&&intersects({x,y,size:t.size},other,3));
+  }
+  function aimDirection(from,target) {
+    const dx=target.x-from.x,dy=target.y-from.y;
+    if(Math.abs(dx)<12&&Math.abs(dy)>28)return dy<0?0:2;
+    if(Math.abs(dy)<12&&Math.abs(dx)>28)return dx<0?3:1;
+    return -1;
+  }
+  function safeAllyShot(from,target,dir) {
+    if(dir<0)return false;
+    const [dx,dy]=vectors[dir];
+    const distance=Math.max(Math.abs(target.x-from.x),Math.abs(target.y-from.y));
+    for(let step=18;step<distance;step+=6) {
+      const x=from.x+dx*step,y=from.y+dy*step,gx=Math.floor(x/T),gy=Math.floor(y/T);
+      // The ally never opens the base's defensive walls or fires toward the eagle.
+      if((gx>=11&&gx<=14&&gy>=23)||Math.abs(x-13*T)<T&&Math.abs(y-25*T)<T)return false;
+      if(map[gy]?.[gx]===2)return false;
+    }
+    return true;
+  }
+  function planAlly(t,target) {
+    // Search tank-sized corridors, rather than treating a one-tile gap as passable.
+    const sx=Math.round(t.x/T),sy=Math.round(t.y/T);
+    const queue=[{x:sx,y:sy,parent:-1}],seen=new Set([sy*N+sx]);
+    let best=0,bestDistance=Infinity;
+    for(let head=0;head<queue.length;head++) {
+      const node=queue[head],point={x:node.x*T,y:node.y*T};
+      const distance=Math.abs(point.x-target.x)+Math.abs(point.y-target.y);
+      if(distance<bestDistance){bestDistance=distance;best=head;}
+      if(safeAllyShot(point,target,aimDirection(point,target))){best=head;break;}
+      for(const [dx,dy] of vectors) {
+        const x=node.x+dx,y=node.y+dy,id=y*N+x;
+        if(x<1||y<1||x>=N||y>=N||seen.has(id)||blocked(t,x*T,y*T,true))continue;
+        // Do not plan the first step through a teammate or an enemy tank.
+        if(head===0&&blocked(t,x*T,y*T))continue;
+        seen.add(id);queue.push({x,y,parent:head});
+      }
+    }
+    const path=[];
+    for(let i=best;i>=0;i=queue[i].parent)path.unshift({x:queue[i].x*T,y:queue[i].y*T});
+    return path;
+  }
+  function updateAlly(t,dt) {
+    const enemies=tanks.filter(e=>e.player<0);
+    // Low enemies are the greatest threat to the base; intercept them first.
+    enemies.sort((a,b)=>(SIZE-a.y+Math.abs(a.x-13*T)*.3)-(SIZE-b.y+Math.abs(b.x-13*T)*.3));
+    const target=enemies[0];
+    if(!target){t.dir=0;t.path=[];t.think=0;return;}
+    const dir=aimDirection(t,target);
+    if(safeAllyShot(t,target,dir)){t.dir=dir;fire(t);t.path=[];t.think=0;return;}
+    t.think-=dt;
+    if(t.think<=0||t.target!==target){t.path=planAlly(t,target);t.target=target;t.think=.4;}
+    while(t.path.length&&Math.abs(t.path[0].x-t.x)<1&&Math.abs(t.path[0].y-t.y)<1)t.path.shift();
+    const next=t.path[0];
+    if(!next)return;
+    const dx=next.x-t.x,dy=next.y-t.y;
+    t.dir=Math.abs(dx)>1?(dx>0?1:3):(dy>0?2:0);
+    const distance=t.dir%2?Math.abs(dx):Math.abs(dy);
+    if(!move(t,Math.min(dt,distance/t.speed))){t.stuck+=dt;if(t.stuck>.2){t.think=0;t.stuck=0;}}
+    else t.stuck=0;
   }
   function move(t,dt) {
     const [dx,dy]=vectors[t.dir],step=t.speed*dt;
@@ -154,7 +217,9 @@
     for(const t of [...tanks]) {
       if(!tanks.includes(t))continue;
       t.cooldown=Math.max(0,t.cooldown-dt);t.shield=Math.max(0,t.shield-dt);t.flash=Math.max(0,t.flash-dt);
-      if(t.player>=0) {
+      if(t.ai) {
+        updateAlly(t,dt);
+      } else if(t.player>=0) {
         const controls=t.player===0?['KeyW','KeyD','KeyS','KeyA']:['ArrowUp','ArrowRight','ArrowDown','ArrowLeft'];
         let dir=-1;for(let i=0;i<4;i++)if(keys.has(controls[i]))dir=i;
         if(dir>=0){t.dir=dir;move(t,dt);}
@@ -209,6 +274,7 @@
     rect(-8,-6,16,17,dark);rect(-6,-7,12,13,main);rect(-3,-24,6,24,main);rect(-1,-24,2,20,'#ffffff33');rect(-4,8,8,4,dark);
     if(t.type===2&&t.player<0){rect(-5,5,10,3,'#e1b96a');}
     ctx.restore();
+    if(t.ai){ctx.fillStyle='#b9d59c';ctx.font='bold 10px monospace';ctx.textAlign='center';ctx.fillText('AI',t.x,t.y-27);}
     if(t.shield>0&&Math.floor(time*12)%2===0){ctx.strokeStyle='#d4e5b0';ctx.lineWidth=2;ctx.strokeRect(t.x-22,t.y-22,44,44);}
   }
   function drawBase() {
