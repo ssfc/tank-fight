@@ -66,11 +66,43 @@ test('tank collision blocks walls, water, other tanks and field boundaries',()=>
 test('single-player spawns an AI ally with independent lives; two-player keeps manual control',()=>{
   const {g,e}=game();g.start();let ally=g.tanks.find(t=>t.player===1);
   assert.equal(ally.ai,true);assert.equal(e('p2-title').textContent,'AI TEAMMATE');
-  g.destroy(ally);assert.equal(g.lives[0],3);assert.equal(g.lives[1],2);
-  assert.equal(g.tanks.find(t=>t.player===1).ai,true);
+  assert.equal(g.lives[1],1);
+  g.destroy(ally);assert.equal(g.lives[0],3);assert.equal(g.lives[1],0);
+  assert.equal(g.tanks.some(t=>t.ai),false);
+  assert.equal(e('p2-label').textContent,'已阵亡 · 下一关归队');
   g.mode=2;g.start();ally=g.tanks.find(t=>t.player===1);
   assert.equal(ally.ai,false);const x=ally.x;
   g.keys.add('ArrowRight');g.update(.03);assert.ok(ally.x>x);
+});
+test('AI returns next stage with one life and full armor; surviving AI cannot accumulate lives',()=>{
+  const {g,e}=game();g.start();g.destroy(g.tanks.find(t=>t.ai));
+  g.spawned=20;g.kills=19;
+  const enemy=g.tank(24,24,2);g.tanks.push(enemy);g.destroy(enemy);g.update(3);
+  assert.equal(g.stage,2);assert.equal(g.lives[1],1);
+  const ally=g.tanks.find(t=>t.ai);assert.ok(ally);assert.equal(ally.hp,2);
+  assert.equal(e('p2-label').textContent,'护甲 2/2 · 每关 1 命');
+  ally.hp=1;g.setupLevel();assert.equal(g.lives[1],1);assert.equal(g.tanks.find(t=>t.ai).hp,2);
+  g.mode=2;g.start();g.destroy(g.tanks.find(t=>t.player===1));g.setupLevel();
+  assert.equal(g.lives[1],2);assert.equal(g.tanks.find(t=>t.player===1).hp,1);
+});
+test('AI armor absorbs one hit, protects briefly, then a second hit removes it for the stage',()=>{
+  const {g,e}=game();g.start();g.spawned=20;
+  const ally=g.tanks.find(t=>t.ai);ally.shield=0;
+  const shoot=()=>{g.bullets.push({x:ally.x,y:ally.y-24,dir:2,owner:g.tank(ally.x,ally.y-70,2),size:7,speed:240});g.update(.03);};
+  shoot();assert.equal(ally.hp,1);assert.equal(g.lives[1],1);assert.ok(g.tanks.includes(ally));
+  assert.equal(e('p2-label').textContent,'护甲 1/2 · 每关 1 命');
+  shoot();assert.equal(ally.hp,1);
+  for(let i=0;i<30;i++)g.update(.03);
+  shoot();assert.equal(g.lives[1],0);assert.equal(g.tanks.some(t=>t.ai),false);assert.equal(g.state,'playing');
+});
+test('AI sidesteps an incoming enemy shot and stops dodging into blocked terrain',()=>{
+  const {g}=game();g.start();g.spawned=20;for(const row of g.map)row.fill(0);
+  const ally=g.tanks.find(t=>t.ai);ally.x=384;ally.y=400;
+  const enemy=g.tank(384,280,2);g.bullets.push({x:384,y:320,dir:2,owner:enemy,size:7,speed:240});
+  g.updateAlly(ally,1/60);assert.ok(ally.x>384);assert.equal(ally.y,400);
+  ally.x=384;ally.y=400;ally.dodgeTime=0;
+  g.map[16][14]=2;g.map[16][17]=3;
+  g.updateAlly(ally,1/60);assert.equal(ally.x,384);assert.equal(ally.y,400);
 });
 test('AI automatically shoots enemies and awards the shared score',()=>{
   const {g}=game();g.start();g.spawned=20;

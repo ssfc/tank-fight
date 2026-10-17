@@ -8,7 +8,7 @@
   let mode = 1, state = 'menu', previous = 0, time = 0, stage = 1, score = 0, best = 0;
   let map, tanks = [], bullets = [], particles = [], drops = [], kills = 0, spawned = 0;
   let spawnTimer = 0, freeze = 0, fortify = 0, transition = 0, baseAlive = true;
-  let lives = [3,3], upgrades = [0,0], sound = false, audio;
+  let lives = [3,1], upgrades = [0,0], sound = false, audio;
   try { best = Number(localStorage.getItem('tank90-best')) || 0; } catch {}
   $('best').textContent = String(best).padStart(6,'0');
   function beep(freq=220, duration=.08, type='square', volume=.035) {
@@ -43,11 +43,13 @@
     clearSpawn(x,y);
     const friend=tank(x,y,0,p);
     friend.ai=p===1&&mode===1;
+    if(friend.ai)friend.hp=2;
     friend.path=[];
     tanks.push(friend);
   }
   function setupLevel() {
     generateMap(stage); tanks=[];bullets=[];particles=[];drops=[];kills=0;spawned=0;spawnTimer=.8;freeze=0;fortify=0;baseAlive=true;
+    if(mode===1){lives[1]=1;upgrades[1]=0;}
     spawnPlayer(0); spawnPlayer(1);
     $('stage-label').textContent='STAGE '+String(stage).padStart(2,'0');
     document.querySelector('.mission .eyebrow span').textContent=String((stage-1)%TankStages.count+1).padStart(2,'0')+' / '+TankStages.count;
@@ -65,7 +67,8 @@
     $('enemy-grid').innerHTML=Array.from({length:20},(_,i)=>'<span class="'+(i<kills?'dead':'')+'"></span>').join('');
     $('life1').textContent='× '+lives[0];$('life2').textContent='× '+lives[1];
     $('p2-title').textContent=mode===2?'PLAYER 2':'AI TEAMMATE';
-    $('p2-label').textContent=mode===2?'僚机 / 绿色坦克':'智能僚机 / 自动回防';
+    const ally=tanks.find(t=>t.ai);
+    $('p2-label').textContent=mode===2?'僚机 / 绿色坦克':lives[1]>0?'护甲 '+(ally?.hp??2)+'/2 · 每关 1 命':'已阵亡 · 下一关归队';
   }
   function overlay(title,desc,kicker,button) {
     $('overlay-title').textContent=title;$('overlay-desc').textContent=desc;$('overlay-kicker').textContent=kicker;
@@ -130,7 +133,34 @@
     for(let i=best;i>=0;i=queue[i].parent)path.unshift({x:queue[i].x*T,y:queue[i].y*T});
     return path;
   }
+  function dodgeAlly(t,dt) {
+    if(t.dodgeTime>0){
+      t.dodgeTime-=dt;t.dir=t.dodgeDir;
+      if(move(t,dt)){t.path=[];t.think=0;return true;}
+      t.dodgeTime=0;
+    }
+    for(const b of bullets) {
+      if(b.owner.player>=0)continue;
+      const [dx,dy]=vectors[b.dir];
+      const ahead=(t.x-b.x)*dx+(t.y-b.y)*dy;
+      const sideways=Math.abs((t.x-b.x)*dy-(t.y-b.y)*dx);
+      if(ahead<0||ahead>b.speed*.65||sideways>22)continue;
+      // Ignore shots that will hit a wall before reaching the ally.
+      let covered=false;
+      for(let d=0;d<ahead-20;d+=6){const cell=map[Math.floor((b.y+dy*d)/T)]?.[Math.floor((b.x+dx*d)/T)];if(cell===1||cell===2){covered=true;break;}}
+      if(covered)continue;
+      const options=dx?[0,2]:[1,3];
+      for(const dir of options){
+        const [ex,ey]=vectors[dir];
+        if([12,24,40].some(d=>blocked(t,t.x+ex*d,t.y+ey*d)))continue;
+        t.dodgeDir=dir;t.dodgeTime=.32;t.dir=dir;t.path=[];t.think=0;
+        move(t,dt);return true;
+      }
+    }
+    return false;
+  }
   function updateAlly(t,dt) {
+    if(dodgeAlly(t,dt))return;
     const enemies=tanks.filter(e=>e.player<0);
     // Low enemies are the greatest threat to the base; intercept them first.
     enemies.sort((a,b)=>(SIZE-a.y+Math.abs(a.x-13*T)*.3)-(SIZE-b.y+Math.abs(b.x-13*T)*.3));
@@ -187,6 +217,16 @@
     if(lives[0]<=0&&(mode===1||lives[1]<=0))end('所有坦克已损失');
     if(kills===20&&state==='playing'){state='transition';transition=2.5;$('game-status').textContent='区域肃清，准备进入下一关';score+=1000;updateHUD();beep(880,.3,'triangle');}
   }
+  function damageTank(t) {
+    if(t.shield>0)return;
+    t.hp--;t.flash=.13;
+    if(t.hp<=0)destroy(t);
+    else {
+      beep(180,.06);
+      if(t.ai){t.shield=.8;updateHUD();}
+      if(t.carrier){dropPower();t.carrier=false;}
+    }
+  }
   function collect(t,d) {
     if(d.kind===0)upgrades[t.player]=Math.min(3,upgrades[t.player]+1);
     if(d.kind===1){for(const e of [...tanks])if(e.player<0)destroy(e);}
@@ -241,7 +281,7 @@
         if(baseAlive&&Math.abs(b.x-13*T)<T-3&&Math.abs(b.y-25*T)<T-3){baseAlive=false;burst(13*T,25*T,'#efb04f',45);dead=true;end('基地已被摧毁');break;}
         for(const t of [...tanks]) {
           if((t.player<0)===(b.owner.player<0))continue;
-          if(intersects(b,t,2)){dead=true;if(t.shield<=0){t.hp--;t.flash=.13;if(t.hp<=0)destroy(t);else {beep(180,.06);if(t.carrier){dropPower();t.carrier=false;}}}break;}
+          if(intersects(b,t,2)){dead=true;damageTank(t);break;}
         }
         if(!dead)for(const other of bullets){if(other!==b&&(other.owner.player<0)!==(b.owner.player<0)&&intersects(b,other,-3)){bullets.splice(bullets.indexOf(other),1);dead=true;burst(b.x,b.y,'#e4d7a5',4);break;}}
       }
@@ -294,7 +334,7 @@
     if(state==='transition'){rect(100,260,424,100,'#172013ee');ctx.fillStyle='#e8c575';ctx.font='bold 28px monospace';ctx.textAlign='center';ctx.fillText('STAGE CLEAR',SIZE/2,300);ctx.font='14px monospace';ctx.fillStyle='#c2cdb2';ctx.fillText('+ 1000  /  NEXT STAGE '+(stage+1),SIZE/2,331);}
   }
   function frame(now) {const dt=Math.min((now-previous)/1000||0,1/30);previous=now;update(dt);render();requestAnimationFrame(frame);}
-  document.querySelectorAll('[data-mode]').forEach(button=>button.addEventListener('click',()=>{mode=Number(button.dataset.mode);document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('selected',b===button));updateHUD();}));
+  document.querySelectorAll('[data-mode]').forEach(button=>button.addEventListener('click',()=>{mode=Number(button.dataset.mode);lives[1]=mode===1?1:3;document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('selected',b===button));updateHUD();}));
   $('start').addEventListener('click',()=>state==='paused'?pause():start());
   $('pause').addEventListener('click',pause);
   $('restart').addEventListener('click',start);
