@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { createHash } from 'node:crypto';
 
 function game() {
   const elements = new Map(), listeners = {};
@@ -14,15 +15,16 @@ function game() {
     window:{addEventListener(name,fn){listeners[name]=fn;}},localStorage:{getItem(){return null;},setItem(){}},requestAnimationFrame(){},Math,console
   });
   const source=readFileSync(new URL('./game.js',import.meta.url),'utf8');
-  vm.runInContext(source.replace(/\}\)\(\);\s*$/,`globalThis.testGame={start,update,pause,fire,tank,destroy,collect,blocked,keys,updateAlly,planAlly,safeAllyShot,
+  vm.runInContext(readFileSync(new URL('./stages.js',import.meta.url),'utf8'),context);
+  vm.runInContext(source.replace(/\}\)\(\);\s*$/,`globalThis.testGame={start,update,pause,fire,tank,destroy,collect,blocked,keys,updateAlly,planAlly,safeAllyShot,generateMap,move,setupLevel,clearSpawn,
     get state(){return state},get tanks(){return tanks},get bullets(){return bullets},get map(){return map},get lives(){return lives},get score(){return score},get stage(){return stage},get upgrades(){return upgrades},get freeze(){return freeze},
     set mode(v){mode=v},set spawned(v){spawned=v},set kills(v){kills=v}};})();`),context);
-  return {g:context.testGame,e:element,listeners};
+  return {g:context.testGame,e:element,listeners,stages:context.TankStages};
 }
 test('start, movement, pause, and restart work even when a button has focus',()=>{
-  const {g,listeners}=game();g.start();const p=g.tanks[0],y=p.y;
-  listeners.keydown({code:'KeyW',target:{tagName:'BUTTON'},preventDefault(){}});g.update(.03);
-  assert.ok(p.y<y);g.pause();const stopped=p.y;g.update(.2);assert.equal(p.y,stopped);
+  const {g,listeners}=game();g.start();const p=g.tanks[0],x=p.x;
+  listeners.keydown({code:'KeyA',target:{tagName:'BUTTON'},preventDefault(){}});g.update(.03);
+  assert.ok(p.x<x);g.pause();const stopped=p.x;g.update(.2);assert.equal(p.x,stopped);
   g.pause();assert.equal(g.state,'playing');g.destroy(p);assert.equal(g.lives[0],2);
   g.start();assert.equal(g.lives[0],3);assert.equal(g.score,0);
 });
@@ -37,6 +39,7 @@ test('shots break bricks, standard shots stop at steel, upgraded shots break ste
 });
 test('friendly fire cannot damage a partner, but an exposed base ends the game',()=>{
   const {g}=game();g.mode=2;g.start();const [p1,p2]=g.tanks;
+  for(const row of g.map)row.fill(0);
   p1.x=192;p1.y=570;p1.dir=1;p2.x=240;p2.y=570;p2.shield=0;
   g.fire(p1);for(let i=0;i<12;i++)g.update(1/60);assert.equal(g.lives[1],3);
   g.bullets.length=0;g.map[23][13]=0;p1.x=312;p1.y=550;p1.dir=2;p1.cooldown=0;g.fire(p1);
@@ -55,6 +58,7 @@ test('clearing 20 enemies awards a bonus and advances the stage',()=>{
 });
 test('tank collision blocks walls, water, other tanks and field boundaries',()=>{
   const {g}=game();g.start();const p=g.tanks[0];
+  g.map[12][5]=3;
   assert.ok(g.blocked(p,-2,100));assert.ok(g.blocked(p,5*24+12,12*24+12));
   g.map[10][10]=1;assert.ok(g.blocked(p,10*24+12,10*24+12));
   const enemy=g.tank(100,100,2);g.tanks.push(enemy);assert.ok(g.blocked(p,100,100));
@@ -106,4 +110,52 @@ test('AI refuses shots through the base or its protective walls',()=>{
   assert.equal(g.safeAllyShot({x:240,y:552},{x:384,y:552},1),false);
   ally.x=240;ally.y=600;const enemy=g.tank(384,600,3);g.tanks.push(enemy);
   g.updateAlly(ally,.03);assert.equal(g.bullets.length,0);
+});
+test('all 35 stage records match the pinned original data and decode half walls correctly',()=>{
+  const {stages}=game();assert.equal(stages.count,35);
+  const data=Buffer.concat(stages.records.map(hex=>Buffer.from(hex,'hex')));
+  assert.equal(data.length,35*91);
+  assert.equal(createHash('sha256').update(data).digest('hex'),'429e25b8e8ed24ae360e9aff3d4697f752416a0aa6adc4c05cd629d0acbd5f0f');
+  for(let level=1;level<=35;level++){
+    const map=stages.decode(level);assert.equal(map.length,26);
+    for(const row of map){assert.equal(row.length,26);for(const cell of row)assert.ok(cell>=0&&cell<=5);}
+  }
+  const map=stages.decode(1);
+  // Stage 1 has no water/forest; its central steel and partial bricks are fixed.
+  assert.equal(map.flat().includes(3),false);assert.equal(map.flat().includes(4),false);
+  assert.equal(map[6][12],2);assert.equal(map[8][10],1);assert.equal(map[9][10],0);
+  assert.equal(map[10][10],0);assert.equal(map[11][10],1);
+  assert.deepEqual(stages.decode(36),map);
+  map[0][0]=1;assert.equal(stages.decode(1)[0][0],0);
+});
+test('a real tank can drive from left spawn to the right side without firing on stage 1',()=>{
+  const {g}=game();g.start();const p=g.tanks[0];g.tanks.splice(1);
+  assert.equal(p.x,216);assert.equal(p.y,600);
+  // Follow the original lower cross-connection above the eagle's wall.
+  for(const [x,y] of [[216,528],[408,528],[408,600],[600,600]]) {
+    let steps=0;
+    while(Math.abs(p.x-x)>.01||Math.abs(p.y-y)>.01) {
+      assert.ok(++steps<1000,'route must make progress');
+      const dx=x-p.x,dy=y-p.y;p.dir=Math.abs(dx)>.01?(dx>0?1:3):(dy>0?2:0);
+      const distance=p.dir%2?Math.abs(dx):Math.abs(dy);
+      assert.equal(g.move(p,Math.min(1/60,distance/p.speed)),true,`blocked at ${p.x},${p.y} toward ${x},${y}`);
+    }
+  }
+  assert.equal(p.x,600);assert.equal(p.y,600);
+});
+test('all original stages have valid spawn footprints and connect after destructible bricks are cleared',()=>{
+  const {g}=game();g.start();const p=g.tanks[0];
+  for(let stage=1;stage<=35;stage++) {
+    g.generateMap(stage);
+    const positions=[[216,600],[408,600],[24,24],[312,24],[600,24]];
+    for(const [x,y] of positions){g.clearSpawn(x,y);assert.equal(g.blocked(p,x,y,true),false,`stage ${stage} spawn ${x},${y}`);}
+    for(const row of g.map)for(let x=0;x<26;x++)if(row[x]===1)row[x]=0;
+    const queue=[[9,25]],seen=new Set(['9,25']);
+    for(let head=0;head<queue.length;head++)for(const [dx,dy] of [[0,-1],[1,0],[0,1],[-1,0]]){
+      const x=queue[head][0]+dx,y=queue[head][1]+dy,key=x+','+y;
+      if(seen.has(key)||g.blocked(p,x*24,y*24,true))continue;
+      seen.add(key);queue.push([x,y]);
+    }
+    for(const [x,y] of positions)assert.ok(seen.has(x/24+','+y/24),`stage ${stage} route to ${x},${y}`);
+  }
 });

@@ -24,20 +24,11 @@
     } catch {}
   }
   function generateMap(level) {
-    map = Array.from({length:N}, () => Array(N).fill(0));
-    for(let y=2;y<23;y++) for(let x=1;x<25;x++) {
-      if (x<3 || x>22 || (x>=11&&x<=14) || y%5===0) continue;
-      if (x%4===0 || x%4===1) {
-        map[y][x] = ((y+Math.floor(x/4)+level)%13===0) ? 2 : 1;
-      }
-    }
-    for(let x=5;x<10;x++) map[12][x]=map[13][x]=3;
-    for(let x=17;x<21;x++) for(let y=17;y<20;y++) map[y][x]=4;
-    if(level%2===0) for(let x=16;x<21;x++) map[7][x]=map[8][x]=3;
-    // Two-tile-wide spawn lanes and a clear approach to the base.
-    for(const sx of [0,12,24]) for(let y=0;y<3;y++) for(let x=sx;x<sx+2;x++) map[y][x]=0;
-    for(let y=22;y<26;y++) for(let x=7;x<19;x++) map[y][x]=0;
-    baseWall(1);
+    map = TankStages.decode(level);
+  }
+  function clearSpawn(x,y) {
+    const left=Math.floor(x/T)-1,top=Math.floor(y/T)-1;
+    for(let gy=top;gy<top+2;gy++)for(let gx=left;gx<left+2;gx++)map[gy][gx]=0;
   }
   function baseWall(value) {
     for(let x=11;x<=14;x++) map[23][x]=value;
@@ -48,7 +39,9 @@
   }
   function spawnPlayer(p) {
     if(lives[p]<=0) return;
-    const friend=tank(p===0?8*T:16*T,24*T-6,0,p);
+    const x=(p===0?9:17)*T,y=25*T;
+    clearSpawn(x,y);
+    const friend=tank(x,y,0,p);
     friend.ai=p===1&&mode===1;
     friend.path=[];
     tanks.push(friend);
@@ -57,7 +50,7 @@
     generateMap(stage); tanks=[];bullets=[];particles=[];drops=[];kills=0;spawned=0;spawnTimer=.8;freeze=0;fortify=0;baseAlive=true;
     spawnPlayer(0); spawnPlayer(1);
     $('stage-label').textContent='STAGE '+String(stage).padStart(2,'0');
-    document.querySelector('.mission .eyebrow span').textContent=String(stage).padStart(2,'0')+' / ∞';
+    document.querySelector('.mission .eyebrow span').textContent=String((stage-1)%TankStages.count+1).padStart(2,'0')+' / '+TankStages.count;
     updateHUD();
   }
   function start() {
@@ -212,7 +205,7 @@
     spawnTimer-=dt;
     if(spawnTimer<=0&&spawned<20&&tanks.filter(t=>t.player<0).length<4+Math.min(2,stage-1)) {
       const positions=[T,13*T,25*T],x=positions[spawned%3];
-      if(!tanks.some(t=>Math.abs(t.x-x)<40&&t.y<65)) {spawned++;const e=tank(x,T,2,-1,spawned%7===0?2:spawned%3===0?1:0);e.shield=.7;tanks.push(e);spawnTimer=1.8;}
+      if(!tanks.some(t=>Math.abs(t.x-x)<40&&t.y<65)) {spawned++;clearSpawn(x,T);const e=tank(x,T,2,-1,spawned%7===0?2:spawned%3===0?1:0);e.shield=.7;tanks.push(e);spawnTimer=1.8;}
     }
     for(const t of [...tanks]) {
       if(!tanks.includes(t))continue;
@@ -263,6 +256,7 @@
     if(type===2){rect(px,py,24,24,'#606a60');rect(px+2,py+2,20,20,'#a1ab99');rect(px+5,py+5,14,14,'#7b8775');rect(px+3,py+3,18,2,'#c0c6b2');rect(px+20,py+4,2,18,'#444e43');}
     if(type===3){rect(px,py,24,24,'#294c57');ctx.fillStyle='#4b7880';for(let j=0;j<3;j++){let offset=Math.floor(time*12+j*4)%12;ctx.fillRect(px+offset,py+4+j*8,9,2);}}
     if(type===4){rect(px,py,24,24,'#2e4125');for(let j=0;j<6;j++){rect(px+(j*7)%20,py+(j*11)%20,5,8,j%2?'#6a7c44':'#4d6336');}}
+    if(type===5){rect(px,py,24,24,'#a8b8b9');rect(px+2,py+2,20,2,'#d1ded6');rect(px+4,py+14,8,2,'#7d989f');rect(px+12,py+12,6,2,'#7d989f');rect(px+18,py+8,2,5,'#7d989f');}
   }
   function drawTank(t) {
     ctx.save();ctx.translate(Math.round(t.x),Math.round(t.y));ctx.rotate(t.dir*Math.PI/2);
