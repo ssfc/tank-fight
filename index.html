@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#151916">
+  <title>坦克大战 · TANK / 90</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header><a class="brand" href="./"><span class="brand-icon">▥</span> TANK / 90 <span class="edition">经典重制</span></a><div class="header-right"><span class="status-dot"></span> LOCAL ARCADE <button id="sound" aria-label="开启音效">声音：关</button></div></header>
+  <main>
+    <section class="intro"><div><p class="eyebrow">INSERT A LITTLE NOSTALGIA</p><h1>坦克大战<span>守住，最后的阵地。</span></h1></div><p class="intro-note">熟悉的砖墙，熟悉的老鹰。<br>这一次，换你来守护。</p></section>
+    <div class="arcade">
+      <section class="machine" aria-label="游戏区域">
+        <div class="machine-bar"><span><i></i> BATTLE FIELD</span><span id="stage-label">STAGE 01</span><button id="pause" title="暂停 / 继续 (P)">Ⅱ 暂停</button></div>
+        <div class="screen-wrap"><canvas id="game" width="624" height="624" aria-label="坦克大战游戏战场"></canvas>
+          <div class="overlay" id="overlay">
+            <div class="overlay-inner"><p class="eyebrow" id="overlay-kicker">THE CLASSIC RETURNS</p><div class="pixel-tank" aria-hidden="true">▥</div><h2 id="overlay-title">准备好出发了吗？</h2><p id="overlay-desc">消灭敌方坦克，守护你的基地。</p><div class="mode-select" id="modes"><button class="selected" data-mode="1">01 单人作战</button><button data-mode="2">02 双人并肩</button></div><button class="start-button" id="start">开始作战 <span>↗</span></button><p class="overlay-tip" id="overlay-tip">按 ENTER 即可开始</p></div>
+          </div>
+        </div>
+        <div class="machine-footer"><span><i class="live-dot"></i><span id="game-status">等待出击</span></span><span>保卫基地 · 全歼敌军</span><button id="restart">↻ 重新开始</button></div>
+        <section class="touch-controls" aria-label="触屏操作"><div class="dpad"><button data-key="KeyW">↑</button><button data-key="KeyA">←</button><button data-key="KeyS">↓</button><button data-key="KeyD">→</button></div><button class="fire" data-key="Space">开火</button></section>
+      </section>
+      <aside>
+        <section class="panel mission"><p class="eyebrow">MISSION CONTROL <span>01 / ∞</span></p><div class="score-label">本局得分</div><div class="score" id="score">000000</div><div class="best">最高纪录 <span id="best">000000</span></div><div class="divider"></div><div class="stat-row"><span>剩余敌军</span><strong id="enemies">20 <small>辆</small></strong></div><div class="enemy-grid" id="enemy-grid"></div><div class="divider"></div><div class="player-row"><span class="player-icon gold">▥</span><div>PLAYER 1<small>先锋 / 黄色坦克</small></div><strong id="life1">× 3</strong></div><div class="player-row"><span class="player-icon green">▥</span><div>PLAYER 2<small id="p2-label">等待战友加入</small></div><strong id="life2">—</strong></div></section>
+        <section class="panel controls"><p class="eyebrow">HOW TO PLAY</p><div class="control-line"><span>1P 移动</span><div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></div></div><div class="control-line"><span>1P 开火</span><kbd class="wide">空格</kbd></div><div class="control-line secondary"><span>2P 移动 / 开火</span><span>方向键 / Enter</span></div><div class="control-line secondary"><span>暂停 / 继续</span><kbd>P</kbd></div><p class="control-note">击中闪光坦克，收集战场补给。<br>小心！基地被击毁即作战失败。</p></section>
+        <div class="field-note"><span>✦</span><p>有些快乐，不需要新手教程。<br><small>致敬那些坐在电视机前的下午。</small></p></div>
+      </aside>
+    </div>
+    <footer><span>TANK / 90 <b>·</b> 为童年，再战一局</span><span>原创致敬作品 <b>／</b> 非官方复刻</span></footer>
+  </main>
+  <script src="game.js"></script>
+</body>
+</html>
