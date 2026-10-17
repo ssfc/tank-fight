@@ -102,7 +102,7 @@ test('AI sidesteps an incoming enemy shot and stops dodging into blocked terrain
   g.updateAlly(ally,1/60);assert.ok(ally.x>384);assert.equal(ally.y,400);
   ally.x=384;ally.y=400;ally.dodgeTime=0;
   g.map[16][14]=2;g.map[16][17]=3;
-  g.updateAlly(ally,1/60);assert.equal(ally.x,384);assert.equal(ally.y,400);
+  g.updateAlly(ally,1/60);assert.equal(ally.x,384);assert.equal(g.blocked(ally,ally.x,ally.y),false);
 });
 test('AI automatically shoots enemies and awards the shared score',()=>{
   const {g}=game();g.start();g.spawned=20;
@@ -123,17 +123,18 @@ test('AI prioritizes the enemy near the base over an aligned distant enemy',()=>
 test('AI routes around steel and water using corridors wide enough for its hull',()=>{
   for(const material of [2,3]) {
     const {g}=game();g.start();for(const row of g.map)row.fill(0);
-    for(let y=1;y<26;y++)if(y<9||y>11)g.map[y][12]=material;
+    for(let y=1;y<26;y++)if(y<18||y>20)g.map[y][12]=material;
     const ally=g.tanks.find(t=>t.ai);ally.x=240;ally.y=480;
     const target=g.tank(384,480,2);g.tanks.push(target);
     // Steel blocks shots; water only blocks movement. Force a steel firing screen
     // on the far side so both terrain cases require a detour.
-    if(material===3)for(let y=12;y<26;y++)g.map[y][13]=2;
+    if(material===3)for(let y=21;y<26;y++)g.map[y][13]=2;
     const path=g.planAlly(ally,target);
-    assert.ok(path.some(p=>p.y<=11*24));
+    assert.ok(path.some(p=>p.y<=20*24));
+    assert.ok(path.every(p=>p.y>=14*24));
     for(const p of path)assert.equal(g.blocked(ally,p.x,p.y,true),false);
     for(let i=0;i<90;i++)g.updateAlly(ally,1/60);
-    assert.ok(ally.y<480);
+    assert.ok(ally.y>=14*24);
   }
 });
 test('AI refuses shots through the base or its protective walls',()=>{
@@ -142,6 +143,63 @@ test('AI refuses shots through the base or its protective walls',()=>{
   assert.equal(g.safeAllyShot({x:240,y:552},{x:384,y:552},1),false);
   ally.x=240;ally.y=600;const enemy=g.tank(384,600,3);g.tanks.push(enemy);
   g.updateAlly(ally,.03);assert.equal(g.bullets.length,0);
+});
+test('defender holds the opposite lower post and ignores even aligned frontline enemies',()=>{
+  const {g}=game();g.start();const ally=g.tanks.find(t=>t.ai);
+  const distant=g.tank(408,120,2);g.tanks.push(distant);
+  for(let i=0;i<600;i++){g.updateAlly(ally,1/60);assert.ok(ally.y>=336);}
+  assert.equal(ally.guardSide,1);assert.equal(ally.x,408);assert.equal(ally.y,528);
+  assert.equal(ally.target,undefined);assert.equal(g.bullets.length,0);
+});
+test('defender waits for a sustained player side change, then uses the lower cross-connection',()=>{
+  const {g}=game();g.start();const [player,ally]=g.tanks;player.x=408;player.y=600;
+  // Stand at the guard post to avoid overlapping the player during this test.
+  ally.x=408;ally.y=528;
+  for(let i=0;i<60;i++)g.updateAlly(ally,1/60);
+  assert.equal(ally.guardSide,1);
+  player.x=312;g.updateAlly(ally,1/60);player.x=408;
+  for(let i=0;i<60;i++)g.updateAlly(ally,1/60);
+  assert.equal(ally.guardSide,1,'a brief center crossing resets the confirmation timer');
+  for(let i=0;i<300;i++){g.updateAlly(ally,1/60);assert.ok(ally.y>=336);}
+  assert.equal(ally.guardSide,-1);assert.equal(ally.x,216);assert.equal(ally.y,528);
+});
+test('defender covers its own flank and helps the other flank for a base emergency',()=>{
+  const {g}=game();g.start();for(const row of g.map)row.fill(0);
+  const ally=g.tanks.find(t=>t.ai);ally.x=408;ally.y=528;
+  const own=g.tank(480,390,2),other=g.tank(144,450,2);g.tanks.push(own,other);
+  g.updateAlly(ally,1/60);assert.equal(ally.target,own);
+  other.y=560;g.updateAlly(ally,1/60);assert.equal(ally.target,other);
+});
+test('defender disengages when an enemy retreats and returns to its post',()=>{
+  const {g}=game();g.start();for(const row of g.map)row.fill(0);
+  const ally=g.tanks.find(t=>t.ai);ally.x=480;ally.y=432;
+  const enemy=g.tank(480,360,2);g.tanks.push(enemy);
+  g.updateAlly(ally,1/60);assert.equal(ally.target,enemy);
+  enemy.y=200;
+  for(let i=0;i<240;i++)g.updateAlly(ally,1/60);
+  assert.equal(ally.target,undefined);assert.equal(ally.x,408);assert.equal(ally.y,528);
+});
+test('defender refuses routes through the upper half even if it is the only detour',()=>{
+  const {g}=game();g.start();for(const row of g.map)row.fill(0);
+  for(let y=14;y<26;y++)g.map[y][12]=2;
+  const ally=g.tanks.find(t=>t.ai);ally.x=240;ally.y=480;
+  const enemy=g.tank(384,480,2);g.tanks.push(enemy);
+  const path=g.planAlly(ally,enemy);
+  assert.ok(path.every(p=>p.y>=336&&p.x<12*24));
+  ally.y=336;ally.dir=0;assert.equal(g.move(ally,1/60),false);
+});
+test('defender dodges toward home instead of freezing at its northern boundary',()=>{
+  const {g}=game();g.start();for(const row of g.map)row.fill(0);
+  const ally=g.tanks.find(t=>t.ai);ally.x=384;ally.y=336;
+  g.bullets.push({x:304,y:336,dir:1,owner:g.tank(250,336,1),size:7,speed:240});
+  g.updateAlly(ally,1/60);assert.ok(ally.y>336);
+});
+test('defender yields space when the player approaches along its corridor',()=>{
+  const {g}=game();g.start();const [player,ally]=g.tanks;
+  player.x=360;player.y=528;player.dir=1;ally.x=408;ally.y=528;
+  for(let i=0;i<60;i++)g.updateAlly(ally,1/60);
+  assert.ok(Math.abs(ally.y-player.y)>=36,'AI must leave the player crossing clear');
+  assert.equal(g.blocked(player,408,528),false);
 });
 test('all 35 stage records match the pinned original data and decode half walls correctly',()=>{
   const {stages}=game();assert.equal(stages.count,35);

@@ -43,7 +43,7 @@
     clearSpawn(x,y);
     const friend=tank(x,y,0,p);
     friend.ai=p===1&&mode===1;
-    if(friend.ai)friend.hp=2;
+    if(friend.ai){friend.hp=2;friend.guardSide=1;friend.sideTime=0;}
     friend.path=[];
     tanks.push(friend);
   }
@@ -111,8 +111,9 @@
     }
     return true;
   }
-  function planAlly(t,target) {
-    // Search tank-sized corridors, rather than treating a one-tile gap as passable.
+  function planAlly(t,target,attack=true) {
+    // Search only the defensive half of the map. If a route is sealed, hold
+    // the nearest reachable post instead of taking a detour through the front.
     const sx=Math.round(t.x/T),sy=Math.round(t.y/T);
     const queue=[{x:sx,y:sy,parent:-1}],seen=new Set([sy*N+sx]);
     let best=0,bestDistance=Infinity;
@@ -120,12 +121,10 @@
       const node=queue[head],point={x:node.x*T,y:node.y*T};
       const distance=Math.abs(point.x-target.x)+Math.abs(point.y-target.y);
       if(distance<bestDistance){bestDistance=distance;best=head;}
-      if(safeAllyShot(point,target,aimDirection(point,target))){best=head;break;}
+      if(attack?safeAllyShot(point,target,aimDirection(point,target)):distance===0){best=head;break;}
       for(const [dx,dy] of vectors) {
         const x=node.x+dx,y=node.y+dy,id=y*N+x;
-        if(x<1||y<1||x>=N||y>=N||seen.has(id)||blocked(t,x*T,y*T,true))continue;
-        // Do not plan the first step through a teammate or an enemy tank.
-        if(head===0&&blocked(t,x*T,y*T))continue;
+        if(x<1||y<14||x>=N||y>=N||seen.has(id)||blocked(t,x*T,y*T))continue;
         seen.add(id);queue.push({x,y,parent:head});
       }
     }
@@ -152,7 +151,7 @@
       const options=dx?[0,2]:[1,3];
       for(const dir of options){
         const [ex,ey]=vectors[dir];
-        if([12,24,40].some(d=>blocked(t,t.x+ex*d,t.y+ey*d)))continue;
+        if([12,24,40].some(d=>t.y+ey*d<14*T||blocked(t,t.x+ex*d,t.y+ey*d)))continue;
         t.dodgeDir=dir;t.dodgeTime=.32;t.dir=dir;t.path=[];t.think=0;
         move(t,dt);return true;
       }
@@ -160,19 +159,41 @@
     return false;
   }
   function updateAlly(t,dt) {
+    const player=tanks.find(p=>p.player===0);
+    const wanted=player&&player.x>15*T?-1:player&&player.x<11*T?1:t.guardSide;
+    if(wanted!==t.guardSide){
+      if(t.pendingSide!==wanted){t.pendingSide=wanted;t.sideTime=0;}
+      t.sideTime+=dt;
+      if(t.sideTime>=1.2){t.guardSide=wanted;t.sideTime=0;t.path=[];t.think=0;}
+    } else {t.pendingSide=null;t.sideTime=0;}
     if(dodgeAlly(t,dt))return;
-    const enemies=tanks.filter(e=>e.player<0);
-    // Low enemies are the greatest threat to the base; intercept them first.
-    enemies.sort((a,b)=>(SIZE-a.y+Math.abs(a.x-13*T)*.3)-(SIZE-b.y+Math.abs(b.x-13*T)*.3));
-    const target=enemies[0];
-    if(!target){t.dir=0;t.path=[];t.think=0;return;}
-    const dir=aimDirection(t,target);
-    if(safeAllyShot(t,target,dir)){t.dir=dir;fire(t);t.path=[];t.think=0;return;}
+    if(player){
+      const dx=player.x-t.x,dy=player.y-t.y;
+      if(t.yieldPost&&Math.hypot(dx,dy)>4*T)t.yieldPost=null;
+      const [px,py]=vectors[player.dir];
+      if(!t.yieldPost&&Math.hypot(dx,dy)<3*T&&dx*px+dy*py<0){
+        for(const dir of px?[0,2]:[1,3]){
+          const [ex,ey]=vectors[dir],x=Math.round(t.x/T)*T+ex*2*T,y=Math.round(t.y/T)*T+ey*2*T;
+          if(y>=14*T&&!blocked(t,x,y)){t.yieldPost={x,y};t.think=0;break;}
+        }
+      }
+    }
+    const enemies=tanks.filter(e=>e.player<0&&e.y>=13*T&&((e.x-13*T)*t.guardSide>=-T||e.y>=21*T));
+    // Cover our assigned flank, but help either side when the base is in danger.
+    const urgency=e=>SIZE-e.y+Math.abs(e.x-13*T)*.3+((e.x-13*T)*t.guardSide<0?45:0);
+    enemies.sort((a,b)=>urgency(a)-urgency(b));
+    const target=t.yieldPost?undefined:enemies[0];
+    const post={x:(t.guardSide>0?17:9)*T,y:22*T};
+    const goal=target||t.yieldPost||post;
+    const dir=target?aimDirection(t,target):-1;
+    t.target=target;
+    if(target&&safeAllyShot(t,target,dir)){t.dir=dir;fire(t);t.path=[];t.think=0;return;}
     t.think-=dt;
-    if(t.think<=0||t.target!==target){t.path=planAlly(t,target);t.target=target;t.think=.4;}
+    const goalKey=target||t.yieldPost||'post'+t.guardSide;
+    if(t.think<=0||t.goalKey!==goalKey){t.path=planAlly(t,goal,Boolean(target));t.goalKey=goalKey;t.think=.4;}
     while(t.path.length&&Math.abs(t.path[0].x-t.x)<1&&Math.abs(t.path[0].y-t.y)<1)t.path.shift();
     const next=t.path[0];
-    if(!next)return;
+    if(!next){t.dir=0;return;}
     const dx=next.x-t.x,dy=next.y-t.y;
     t.dir=Math.abs(dx)>1?(dx>0?1:3):(dy>0?2:0);
     const distance=t.dir%2?Math.abs(dx):Math.abs(dy);
@@ -183,6 +204,7 @@
     const [dx,dy]=vectors[t.dir],step=t.speed*dt;
     // Small alignment assist keeps narrow lanes comfortable with a keyboard.
     let nx=t.x+dx*step,ny=t.y+dy*step;
+    if(t.ai&&ny<14*T)return false;
     if(!blocked(t,nx,ny)){t.x=nx;t.y=ny;return true;}
     const perpendicular=t.dir%2===0?'x':'y';
     const center=Math.round(t[perpendicular]/T)*T;
